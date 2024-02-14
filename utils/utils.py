@@ -1,183 +1,185 @@
-# import sys
-# sys.path.insert(0, "/home2/manugaur/vlm_models/ViFi-CLIP")
 import streamlit as st
-import gc
+import skimage.io as io
 from PIL import Image
-from models.clip import *
-from models.blip import *
-from models.align import *
-from models.clip4clip import *
-from models.xclip import *
-from models.vifi_clip import *
-from models.blip2 import *
+import matplotlib.pyplot as plt
+import pickle
+import json
+import numpy as np
+import gc
+import os
+import clip
+import torch
+import random
+from tqdm import tqdm
+import sys
+import torch.nn.functional as F
+import faiss
+import sys
+import math
 
+def get_cocoid_list(split : str):
+    split_cocoids_path = f"/ssd_scratch/cvit/manu/img_cap_self_retrieval_clip/data/parse_coco_req/{split}_cocoids.json"
+    with open(split_cocoids_path, "rb") as f: 
+        return json.load(f)
 
+def open_json(path : str):
+    with open(path, "r") as f:
+        return json.load(f)
 
-def clear_ada_cache(model, processor):
-    """
-    Function to clear cache in ada on task change in different models
-    """
+def open_pickle(path : str):
+    with open(path, "rb") as f:
+        return pickle.load(f)
 
-    print("Clearing cache in ada")
-    # use gc to clear all the dereferenced versions of the variable model
-    gc.collect()
-    # del model
-    # gc.disable()
-    # return model, processor
-    
-#------------------------------------------------------------------------------------------------------------------------
-                                            #IMAGE HELPER    
+def load_data(multimodal):
+    st.write("loading data")
+    # test + val cocoids
+    test_val_cocoids = open_json("/ssd_scratch/cvit/manu/img_cap_self_retrieval_clip/data/parse_coco_req/test_val_cocoids.json")
+    # Load CLIP feats
+    clip_feat_path = "/ssd_scratch/cvit/manu/img_cap_self_retrieval_clip/data/clip_feats"
 
-def choose_task(uploaded_file, model_type):
-    """
-    Function to choose the task
-    """
-    task = st.selectbox("Select the task",
-                        ("None", "Image Classification", "Image Captioning", "Question Answering"), key=model_type+"_task")
-    if task == "Image Classification":
-        # print("Classification using "+model_type)
-        get_classification_prompts(uploaded_file, model_type)
-    elif task == "Image Captioning":
-        print("Captioning using "+model_type)
-        st.write("Image Captioning")
-    elif task== "Question Answering":
-        print("Question Answering using "+model_type)
-        get_answer(uploaded_file, model_type)
+    cocoid2idx = open_json(os.path.join(clip_feat_path, "coco_test_val_cocoid2idx.json"))
 
+    clip_text_feats = F.normalize(torch.load(os.path.join(clip_feat_path,"coco_test_val_text_avg.pt")), p=2, dim =-1)
+    clip_img_feats = F.normalize(torch.load(os.path.join(clip_feat_path,"coco_test_val_img_avg.pt")), p=2, dim =-1)
 
-def get_answer(uploaded_file, model_type):
-    """
-    Function to get the answer
-    """
-    question = st.text_input(
-        'Enter question', value="What is the name of the ", key=model_type+"question")
-    image = Image.open(uploaded_file)
-        
-    if (question != "" and question != "What is the name of the "):
-        answer = question_answering_models(image, question, model_type)
-        st.write("Answer: ", answer)
+    # Get distance matrix 
+    # Define feat 
+    mm_clip_feats = clip_img_feats + clip_text_feats
+    if multimodal:
+        feats = mm_clip_feats.clone()    
+    return cocoid2idx, feats
+
+def build_dist_matrix(cosine_sim, feats):
+    st.write("calculating dist matrix")
+    feats = feats.cpu().numpy().astype(np.float32)
+    # st.write(f"clip feats shape : {feats.shape}")
+
+    clip_dim = feats.shape[1]
+    if cosine_sim: 
+        index = faiss.IndexFlatIP(clip_dim)
     else:
-        st.markdown(":red[Please enter the question]")
+        index = faiss.IndexFlatL2(clip_dim)
+    faiss.normalize_L2(feats)
+    index.add(feats)
 
-def question_answering_models(image, question, model_type):
-    """
-    Function to run the classification models
-    """
-    gc.enable()
-    model = None
-    processor = None
-    clear_ada_cache(model, processor)
+    search_vector = feats
+    # st.write(f"search vector shape : {search_vector.shape}")
 
-    if model_type=="BLIPv2":
-        print("Loading BLIPv2 classification model")
-        return BLIP2_Question_Answering_Model(image, question)
+    faiss.normalize_L2(search_vector)
+    k = index.ntotal
+    st.write(f"Creating bags across {k} cocoids")
+    distances, ann = index.search(search_vector, k=k) # ann --> indices corresponding to distances.
 
+    # First retrieval is cocoid itself
+    return ann[:, 1:], distances[:, 1:]
 
-
-def get_classification_prompts(uploaded_file, model_type):
-    """
-    Function to get the classification prompts
-    """
-
-    prompt1 = st.text_input(
-        'Enter prompt 1', value="A photo of a ", key=model_type+"prompt1")
-    prompt2 = st.text_input(
-        'Enter prompt 2', value="A photo of a ", key=model_type+"prompt2")
-    prompt = [prompt1, prompt2]
+def cocoid2img(cocoid : int, only_path : bool = False):
     
-    image = Image.open(uploaded_file)
+    # print(f"cocoid : {cocoid}")
+    
+    img_path = f"/ssd_scratch/cvit/manu/coco/train2014/COCO_train2014_{int(cocoid):012d}.jpg"
+    if not os.path.isfile(img_path):
+        img_path = f"/ssd_scratch/cvit/manu/coco/val2014/COCO_val2014_{int(cocoid):012d}.jpg"
+    if only_path:
+        return img_path
+    image = Image.open(img_path)
+    image = image.resize((300, 300))
+    st.image(image, caption = "image")
+    # image = io.imread(img_path)
+    # image = Image.fromarray(image)
+    # st.write('\n')
+    
+    # fig = plt.figure(figsize=(3,3))
+    # plt.imshow(image)
+    # plt.axis('off')
+    # # plt.show()
+    # st.pyplot()
+
+
+def quali_analysis(cocoid : int, plot : bool, preds : bool, gt : bool):
+    if plot:
+        cocoid2img(cocoid)
+    st.write(f"cocoid : {cocoid}")
+    if preds :
+        st.write(f"\ncvpr23 : {cvpr23[cocoid]}")
+        st.write(f"cider : {cvpr_cider[cocoid]}\n ")
+
+        st.write(f"cider  : {cider_optim[cocoid]}")
+        st.write(f"cider : {cider_optim_cider[cocoid]}\n ")
+
+        st.write(f"mle    : {clipcap_mle[cocoid]}")
+        st.write(f"cider : {mle_cider[cocoid]} ")
+
+    if gt :     
+        st.write(f"BLIP:\n{blip[cocoid]}")
+
+        st.write(f"\nllama GT : {cocoid2llama_gt[cocoid]} \n")
+
+        st.write("narrations:")
+        for narration in narrations[cocoid]:
+            st.write(narration)
+        st.write("\nCOCO GT:")
+        for cap in cocoid2cap[cocoid]:
+            st.write(cap) 
+
+def get_bags(ann, argsorted_dist_matrix_ids, idx2cocoid,  bag_idx : int, bag_size : int, cocoid2cap, align : bool):
+    """
+    get N bags with highest cumsum (until k retrievals) cosine sim 
+    """
+    st.write({f"bag_idx = {bag_idx}"})
+    bag = []
+    seen_imgs = set()
+    clip_idx = argsorted_dist_matrix_ids[bag_idx]
+    cocoid_1 = idx2cocoid[clip_idx]
+    bag.append(cocoid_1)
+    # quali_analysis(cocoid_1, plot = True, preds = False, gt = False)
+
+    for idx, sim_img in enumerate(ann[clip_idx][:bag_size - 1]):
+        cocoid_2 = idx2cocoid[sim_img]
+        bag.append(cocoid_2)
+        # quali_analysis(cocoid_2, plot = True, preds = False, gt = False)
+            
+        # st.write("*" * 300)
+        # st.write("\n")
+    if not align :
+        max_cols = 3
+        num_cols = min(bag_size, max_cols)
+        cols = st.columns(num_cols)
         
-    if (prompt1 != "" and prompt2 != "" and prompt1 != "A photo of a " and prompt2 != "A photo of a "):
-        probs = classification_models(image, prompt, model_type)
-        st.write("Probability of prompt 1: ", probs.detach().numpy()[0][0])
-        st.write("Probability of prompt 2: ", probs.detach().numpy()[0][1])
+        for idx, cocoid in enumerate(bag):
+
+            col_idx = idx  % num_cols
+            image_file = cocoid2img(cocoid, only_path = True)
+            
+            with Image.open(image_file) as image:
+                cols[col_idx].image(image, caption = f"{idx}",use_column_width=True)
+                cols[col_idx].write(f"This is a cap")
     else:
-        st.markdown(":red[Please enter both the prompts]")
-
-def classification_models(image, prompt, model_type):
-    """
-    Function to run the classification models
-    """
-    gc.enable()
-    model = None
-    processor = None
-    clear_ada_cache(model, processor)
-
-    if model_type=="ALIGN":
-        print("Loading ALIGN classification model")
-        return ALIGN_classification_model(image, prompt)
-    
-    elif model_type=="CLIP":
-        print ("Loading CLIP classification model")
-        st.spinner("Loading CLIP classification model")
-        return CLIP_classification_model(image, prompt)
-    
-    elif model_type=="BLIP":
-        print ("Loading BLIP classification model")
-        return BLIP_classification_model(image, prompt)
-    
-    elif model_type=="BLIPv2":
-        print ("Loading BLIPv2 classification model")
-        return BLIP2_classification_Model(image, prompt)
-    
-#------------------------------------------------------------------------------------------------------------------------
-                                            #VIDEO HELPERS
-
-def choose_vid_task(uploaded_file, model_type):
-
-    task = st.selectbox("Select the task",
-                        ("None", "Video Classification", "Video Captioning"), key=model_type+"_task")
-    if task == "Video Classification":
-        # print("Classification using "+model_type)
-        get_vid_cls_prompts(uploaded_file, model_type)
-    elif task == "Image Captioning":
-        print("Captioning using "+model_type)
-        st.write("Image Captioning")        
-
-def get_vid_cls_prompts(uploaded_file, model_type):
-
-    prompt1 = st.text_input(
-        'Enter prompt 1', value="A video of a ", key=model_type+"prompt1")
-    prompt2 = st.text_input(
-        'Enter prompt 2', value="A video of a ", key=model_type+"prompt2")
-    prompt = [prompt1, prompt2]
-
-    #####reading video inpt
-    # image = Image.open(uploaded_file)
+        max_cols = 3
+        num_cols = min(bag_size, max_cols)
+        cols = st.columns(num_cols)
         
-    if (prompt1 != "" and prompt2 != "" and prompt1 != "A video of a " and prompt2 != "A video of a "):
-        probs = vid_cls_models(uploaded_file, prompt, model_type)
-        st.write("Probability of prompt 1: ","{:.2f}".format(probs.detach().numpy()[0][0]))
-        st.write("Probability of prompt 2: ","{:.2f}".format(probs.detach().numpy()[0][1]))        
-    else:
-        st.markdown(":red[Please enter both the prompts]")
+        max_height = 0
+        image_heights = []
+        for idx, cocoid in enumerate(bag):
 
+            col_idx = idx  % num_cols
+            image_file = cocoid2img(cocoid, only_path = True)
+            
+            with Image.open(image_file) as image:
+                cols[col_idx].image(image, caption = f"{cocoid}",use_column_width=True)
+                image_height = image.height
+                image_heights.append(image_height)
+                max_height = max(max_height, image_height)
+            
+            if col_idx == max_cols - 1 or idx == bag_size -1 :
 
-
-def vid_cls_models(video, prompt, model_type):
-    """
-    Function to run the classification models
-    """
-    gc.enable()
-    model = None
-    processor = None
-    clear_ada_cache(model, processor)
-
-    if model_type=="CLIP4CLIP":
-        print("Loading CLIP4CLIP classification model")
-        st.spinner("Loading CLIP4CLIP classification model")
-        return CLIP4CLIP_classification_model(video, prompt)
-    
-    elif model_type=="XCLIP":
-        print ("Loading XCLIP classification model")
-        st.spinner("Loading XCLIP classification model")
-        return XCLIP_classification_model(video, prompt)
-    elif model_type=="VIFICLIP":
-        print ("Loading VIFI-CLIP classification model")
-        st.spinner("Loading VIFI-CLIP classification model")
-        return VIFICLIP_classification_model(video, prompt)
-    
-    elif model_type=="BLIP":
-        print ("Loading BLIP classification model")
-        return BLIP_classification_model(video, prompt)
-    
+                for idx, h in enumerate(image_heights):
+                    diff = math.ceil((max_height -h)//80)
+                    for M in range(diff):
+                        cols[idx].write("\n")
+                    cols[idx].write(cocoid2cap[int(cocoid)])
+                    # for cap in cocoid2cap[int(cocoid)]:
+                    #     cols[idx].write(f"<span style='font-size: 12px; color : green;line-height: 0;'>{cap}</span>", unsafe_allow_html=True)
+                image_heights = []
+                max_height = 0             
