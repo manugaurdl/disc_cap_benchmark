@@ -1,21 +1,21 @@
 import streamlit as st
-import skimage.io as io
-from PIL import Image
-import matplotlib.pyplot as plt
+# import skimage.io as io
+# from PIL import Image
+# import matplotlib.pyplot as plt
 import pickle
 import json
-import numpy as np
-import gc
+# import numpy as np
+# import gc
 import os
-import clip
-import torch
-import random
-from tqdm import tqdm
-import sys
-import torch.nn.functional as F
-import faiss
-import sys
-import math
+# import clip
+# import torch
+# import random
+# from tqdm import tqdm
+# import sys
+# import torch.nn.functional as F
+# import faiss
+# import sys
+# import math
 
 def get_cocoid_list(split : str):
     split_cocoids_path = f"/ssd_scratch/cvit/manu/img_cap_self_retrieval_clip/data/parse_coco_req/{split}_cocoids.json"
@@ -31,22 +31,25 @@ def open_pickle(path : str):
         return pickle.load(f)
 
 def load_data(multimodal):
-    st.write("loading data")
+    
     # test + val cocoids
-    test_val_cocoids = open_json("/ssd_scratch/cvit/manu/img_cap_self_retrieval_clip/data/parse_coco_req/test_val_cocoids.json")
+    test_val_cocoids = open_json(os.path.join(data_dir, "test_val_cocoids.json"))
     # Load CLIP feats
-    clip_feat_path = "/ssd_scratch/cvit/manu/img_cap_self_retrieval_clip/data/clip_feats"
+    cocoid2idx = open_json(os.path.join(data_dir, "coco_test_val_cocoid2idx.json"))
 
-    cocoid2idx = open_json(os.path.join(clip_feat_path, "coco_test_val_cocoid2idx.json"))
+    # clip_text_feats = F.normalize(torch.load(os.path.join(clip_feat_path,"coco_test_val_text_avg.pt")), p=2, dim =-1)
+    # clip_img_feats = F.normalize(torch.load(os.path.join(clip_feat_path,"coco_test_val_img_avg.pt")), p=2, dim =-1)
+    
+    img_feats = torch.load(os.path.join(data_dir,"img_feats/coco_test_val_img_avg.pt"))
 
-    clip_text_feats = F.normalize(torch.load(os.path.join(clip_feat_path,"coco_test_val_text_avg.pt")), p=2, dim =-1)
-    clip_img_feats = F.normalize(torch.load(os.path.join(clip_feat_path,"coco_test_val_img_avg.pt")), p=2, dim =-1)
-
-    # Get distance matrix 
-    # Define feat 
-    mm_clip_feats = clip_img_feats + clip_text_feats
+    
     if multimodal:
-        feats = mm_clip_feats.clone()    
+        text_feats = torch.load(os.path.join(data_dir,"text_feats/coco_test_val_text_avg.pt"))
+        mm_clip_feats = img_feats + text_feats
+        feats = mm_clip_feats.clone()
+    else:
+        feats = img_feats.clone()
+      
     return cocoid2idx, feats
 
 def build_dist_matrix(cosine_sim, feats):
@@ -80,11 +83,10 @@ def cocoid2img(cocoid : int, only_path : bool = False):
     img_path = f"/ssd_scratch/cvit/manu/coco/train2014/COCO_train2014_{int(cocoid):012d}.jpg"
     if not os.path.isfile(img_path):
         img_path = f"/ssd_scratch/cvit/manu/coco/val2014/COCO_val2014_{int(cocoid):012d}.jpg"
-    if only_path:
-        return img_path
-    image = Image.open(img_path)
-    image = image.resize((300, 300))
-    st.image(image, caption = "image")
+    return img_path
+    # image = Image.open(img_path)
+    # image = image.resize((300, 300))
+    # st.image(image, caption = "image")
     # image = io.imread(img_path)
     # image = Image.fromarray(image)
     # st.write('\n')
@@ -130,12 +132,12 @@ def get_bags(ann, argsorted_dist_matrix_ids, idx2cocoid,  bag_idx : int, bag_siz
     bag = []
     seen_imgs = set()
     clip_idx = argsorted_dist_matrix_ids[bag_idx]
-    cocoid_1 = idx2cocoid[clip_idx]
+    cocoid_1 = idx2cocoid[str(clip_idx)]
     bag.append(cocoid_1)
     # quali_analysis(cocoid_1, plot = True, preds = False, gt = False)
 
     for idx, sim_img in enumerate(ann[clip_idx][:bag_size - 1]):
-        cocoid_2 = idx2cocoid[sim_img]
+        cocoid_2 = idx2cocoid[str(sim_img)]
         bag.append(cocoid_2)
         # quali_analysis(cocoid_2, plot = True, preds = False, gt = False)
             
@@ -151,9 +153,9 @@ def get_bags(ann, argsorted_dist_matrix_ids, idx2cocoid,  bag_idx : int, bag_siz
             col_idx = idx  % num_cols
             image_file = cocoid2img(cocoid, only_path = True)
             
-            with Image.open(image_file) as image:
-                cols[col_idx].image(image, caption = f"{idx}",use_column_width=True)
-                cols[col_idx].write(f"This is a cap")
+            # with Image.open(image_file) as image:
+            cols[col_idx].image(image_file, caption = f"{cocoid}",use_column_width=True)
+            cols[col_idx].write(cocoid2cap[int(cocoid)])
     else:
         max_cols = 3
         num_cols = min(bag_size, max_cols)
