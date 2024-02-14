@@ -27,65 +27,69 @@ st.set_page_config(
 )
 
 st.write("# Discriminant Captioning Benchmark")
+class Benchmark:
+    def __init__(self):
+        self.ann = None
+        self.caption_type = None 
+        self.argsorted_dist_matrix_ids = None
+        self.cocoid2cap = None
+        self.idx2cocoid = None 
+        self.bag_size = None
+        self.bag_idx = None
 
-def init_data(caption_type, multimodal, bag_size = 3):
+    def init_data(self):
 
-    idx2cocoid = open_json(os.path.join(data_dir, "coco_test_val_idx2cocoid.json")) # this comes from test_val_cocoids. Invariant to caption type
-    
-    if caption_type == "coco":
-        cocoid2cap = open_pickle("/home2/manugaur/synthetic_data/data/cocoid2caption.pkl")
+        idx2cocoid = open_json(os.path.join(data_dir, "coco_test_val_idx2cocoid.json")) # this comes from test_val_cocoids. Invariant to caption type
         
-    if multimodal:
-        filename = f"clip_mm_{caption_type}"
-        folder = "mm_feats"  # for argsorted_dist_matrix_ids
-    ann_filepath = os.path.join(data_dir, "ann", filename + ".npy")
-    ann = np.load(ann_filepath)
-    argsorted_dist_matrix_ids = np.load(os.path.join(data_dir, folder, "argsorted_dist_matrix_ids", filename + f"_bsz_{bag_size}.npy"))
+        if self.caption_type == "coco":
+            cocoid2cap = open_pickle("/home2/manugaur/synthetic_data/data/cocoid2caption.pkl")
+            
+        if multimodal:
+            filename = f"clip_mm_{self.caption_type}"
+            folder = "mm_feats"  # for argsorted_dist_matrix_ids
+        ann_filepath = os.path.join(data_dir, "ann", filename + ".npy")
+        ann = np.load(ann_filepath)
+        argsorted_dist_matrix_ids = np.load(os.path.join(data_dir, folder, "argsorted_dist_matrix_ids", filename + f"_bsz_{self.bag_size}.npy"))
 
-    st.write("data loaded")
-    return ann, argsorted_dist_matrix_ids, idx2cocoid, cocoid2cap
+        st.write("data loaded")
+        return ann, argsorted_dist_matrix_ids, idx2cocoid, cocoid2cap
 
-def on_callback(ann, argsorted_dist_matrix_ids, idx2cocoid, cocoid2cap):
-    get_bags(ann, argsorted_dist_matrix_ids, idx2cocoid, bag_idx = st.session_state.bag_idx, bag_size= 3, cocoid2cap = cocoid2cap, align = ALIGN)
+    def on_callback(self):
+        st.write("in callback")
+        get_bags(self.ann, self.argsorted_dist_matrix_ids, self.idx2cocoid, bag_idx = self.bag_idx, bag_size= self.bag_size, cocoid2cap = self.cocoid2cap, align = ALIGN)
 
+    def main(self):
+        # if 'bag_idx' not in st.session_state:
+        #     st.session_state.bag_idx = 0
+        # if 'caption_type' not in st.session_state:
+        #     st.session_state.caption_type = None
 
-# def get_next_bag(ann, distances, idx2cocoid, align):
-#     get_bags(ann, distances, idx2cocoid, bag_idx = st.session_state.bag_idx, bag_size= st.session_state.bag_size, align = ALIGN)
-
-def main():
-    caption_type = st.selectbox("Select caption type", ["coco", "mistral"])
-
-    if 'caption_type' not in st.session_state:
-        st.session_state.prev_caption_type = None
-    
-    if st.session_state.prev_caption_type != caption_type:
-        ann, argsorted_dist_matrix_ids, idx2cocoid, cocoid2cap = init_data(caption_type, multimodal)
-        st.session_state.prev_caption_type = caption_type
         
+        caption_type = st.selectbox("Select caption type", ["coco", "mistral"])
+        
+        if self.caption_type != caption_type:
+            self.caption_type = caption_type
+            # SELECT BAG_SIZE   
+            # if 'bag_size' not in st.session_state:
+            #     st.session_state.bag_size = 3
+            bag_size = st.number_input("Select bag size : ", 2, 10, 3, key="new_bag_size")
 
-    # # SELECT BAG_SIZE
-    # if 'bag_size' not in st.session_state:
-    #     st.session_state.bag_size = 3
-
-    # bag_size = st.number_input("Select bag size : ", 2, 10, 3, key="new_bag_size")
-
-    # if st.session_state.bag_size != bag_size:
-    #     st.session_state.bag_size = bag_size
-    #     cum_sum = np.sum(distances[:, :bag_size -1 ], axis = 1) # shape = num_rows
-    #     argsorted_dist_matrix_ids = np.argsort(cum_sum)[::-1]  #sort clip idx in descending order of cumsum of k most sim ids
-    #     st.session_state.argsorted_dist_matrix_ids = argsorted_dist_matrix_ids
-    #     on_callback(ann, idx2cocoid, cocoid2cap, ALIGN)
-
-    # Select BAG_IDX
-
-    if 'bag_idx' not in st.session_state:
-        st.session_state.bag_idx = 0
+            if self.bag_size != bag_size:
+                self.bag_size = bag_size
     
-    bag_idx = st.number_input("Select bag idx to retrieve : ", 0, 9999, 0, key="new_bag_idx")
-    
-    if st.session_state.bag_idx != bag_idx:
-        st.session_state.bag_idx = bag_idx
-        on_callback(ann, argsorted_dist_matrix_ids, idx2cocoid, cocoid2cap)
+            self.ann, self.argsorted_dist_matrix_ids, self.idx2cocoid, self.cocoid2cap = self.init_data()
+            st.write(self.ann.shape)
+
+
+        # SELECT BAG_IDX 
+            
+        bag_idx = st.number_input("Select bag idx to retrieve : ", 0, 9999, 0, key="new_bag_idx")
+            
+        if self.bag_idx != bag_idx:
+            self.bag_idx = bag_idx
+            # self.on_callback(self.ann, self.argsorted_dist_matrix_ids, self.idx2cocoid, self.cocoid2cap)
+            self.on_callback()     
+        
     # # st.markdown(
     # #     """
     # #     <style>
@@ -102,4 +106,5 @@ def main():
     # #st.button('Next', on_click = get_next_bag, args = (ann, distances, idx2cocoid, ALIGN, ))
 
 if __name__ == "__main__":
-    main()
+    obj = Benchmark()
+    obj.main()
